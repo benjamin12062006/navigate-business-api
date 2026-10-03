@@ -11,7 +11,7 @@ import (
 	authhttp "navigate-business-api/internal/auth/http"
 )
 
-func NewRouter(authHandler *authhttp.Handler) http.Handler {
+func NewRouter(authHandler *authhttp.Handler, authenticator *authhttp.Authenticator) http.Handler {
 	router := chi.NewRouter()
 
 	router.Use(middleware.RequestID)
@@ -29,7 +29,7 @@ func NewRouter(authHandler *authhttp.Handler) http.Handler {
 	})
 
 	router.Route("/api/v1/auth", func(r chi.Router) {
-		r.Use(authHandler.RequireGoogle)
+		r.Use(authenticator.RequireGoogle)
 		r.Post("/sync", authHandler.Sync)
 		r.Get("/me", authHandler.Current)
 	})

@@ -1,10 +1,10 @@
 # 01 — Autenticación Firebase y cuenta interna en Go
 
-Fecha de creación: 2026-09-29  
-Última actualización: 2026-09-29  
-Estado: Primera etapa de backend implementada; integración real con Firebase y Cloud SQL pendiente de credenciales  
-Ámbito: `navigate-business-api`, únicamente autenticación y persistencia de identidad  
-Revisión de referencia: sin revisión Git disponible en esta carpeta al redactar el plan  
+Fecha de creación: 2026-09-29
+Última actualización: 2026-09-30
+Estado: Primera etapa implementada; conexión Cloud SQL verificada y recorrido autenticado pendiente
+Ámbito: `navigate-business-api`, únicamente autenticación y persistencia de identidad
+Revisión de referencia: sin revisión Git disponible en esta carpeta al redactar el plan
 Relacionada con: [producto: autenticación](../../../docs/product/09-autenticacion-pagos-y-decisiones-abiertas.md), [producto: cuenta única](../../../docs/product/03-identidad-roles-y-tiendas.md), [arquitectura Go](../fonts/go-backend/arquitectura/01-tiago-arquitectura-y-repositorios.md), [auth Go](../fonts/go-backend/autenticacion-autorizacion/01-tiago-autenticacion-y-autorizacion.md), [persistencia](../fonts/go-backend/persistencia-seguridad/01-transacciones-y-seguridad-de-datos.md), [bitácora 03](../../bitacora-construccion/auth/03-modulo-auth-y-migraciones-estandar.md) y [README](../../README.md).
 
 ## Objetivo y alcance exacto
@@ -98,15 +98,18 @@ Archivos de la primera etapa implementada:
 | `internal/auth/http/middleware.go` | Bearer, verificación y UID en contexto para todas las rutas del grupo protegido. |
 | `internal/auth/http/handler.go` | Respuestas `/auth/sync`, `/auth/me` y errores HTTP de cuenta. |
 | `internal/httpapi/router.go` | Montar rutas auth con Chi y límite de tiempo. |
-| `cmd/api/main.go` | Leer configuración, inicializar Firebase Admin y `pgxpool`, inyectar dependencias y cerrar el pool. |
+| `internal/config/config.go` | Validar variables de entorno y fijar la dirección HTTP predeterminada. |
+| `internal/app/app.go` | Inicializar Firebase Admin y `pgxpool` una vez, componer módulos y cerrar el pool. |
+| `internal/auth/module/module.go` | Conectar repositorio, servicio, handler y autenticador compartible. |
+| `cmd/api/main.go` | Arrancar el servidor con la configuración y el handler preparados. |
 | `migrations/000001_auth.{up,down}.sql` | Declarar y revertir el esquema de identidad con SQL propio. |
 | `Makefile` | Exponer `migrate-up` y `migrate-down` con la CLI versionada de `golang-migrate`; el motor conserva el registro de versión. |
 
-Dirección de dependencias: `httpapi/router → auth/http → auth.Service → auth.Repository`; `auth/firebase` verifica identidad en el borde, `auth/postgres` implementa el puerto y `main` conecta las piezas. Chi queda en HTTP; Firebase y `pgx` no entran en `auth/service.go`. Los subpaquetes agrupan adaptadores de la funcionalidad sin convertir el núcleo en dependiente de ellos. Esto adapta la separación enseñada por Tiago, sin copiar su JWT HMAC ni sus tablas de roles [F1, R1, F2, R2]. No se crearán interfaces por cada struct: solo el verificador externo y el repositorio usados por el servicio/HTTP.
+Dirección de dependencias: `httpapi/router → auth/http → auth.Service → auth.Repository`; `auth/firebase` verifica identidad en el borde, `auth/postgres` implementa el puerto y `internal/app` conecta las piezas mediante `auth/module`. Chi queda en HTTP; Firebase y `pgx` no entran en `auth/service.go`. Los subpaquetes agrupan adaptadores de la funcionalidad sin convertir el núcleo en dependiente de ellos. Esto adapta la separación enseñada por Tiago, sin copiar su JWT HMAC ni sus tablas de roles [F1, R1, F2, R2]. No se crearán interfaces por cada struct: solo el verificador externo y el repositorio usados por el servicio/HTTP.
 
-Go accederá directamente al PostgreSQL asociado a SQL Connect mediante `pgxpool`, con el conector de Cloud SQL o Auth Proxy según el entorno; no llamará a `executeGraphql`, conectores GraphQL ni SDK de datos de SQL Connect. La documentación oficial permite este acceso directo con rol SQL y `roles/cloudsql.client` [O5, O9].
+Go accederá directamente al PostgreSQL asociado a SQL Connect mediante `pgxpool` y Cloud SQL Go Connector; no llamará a `executeGraphql`, conectores GraphQL ni SDK de datos de SQL Connect. El conector usa ADC y la documentación oficial permite este acceso directo con rol SQL y `roles/cloudsql.client` [O5, O9].
 
-Configuración implementada: `FIREBASE_PROJECT_ID`, credenciales ADC, `DATABASE_URL` PostgreSQL que apunte al proxy/conector Cloud SQL, pool máximo de cinco conexiones y timeout HTTP de ocho segundos. `FIREBASE_AUTH_EMULATOR_HOST` se permite solo con `APP_ENV=development`; el emulador acepta tokens de prueba sin firma [O11, O12]. Las credenciales y URI con secretos quedan fuera de Git. Si Firebase o SQL fallan, la API no autoriza por omisión. La configuración concreta de la instancia y permisos IAM/SQL se hará al disponer del proyecto Firebase [O5, O9].
+Configuración implementada: `FIREBASE_PROJECT_ID`, ADC, `INSTANCE_CONNECTION_NAME`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, pool máximo de cinco conexiones y timeout HTTP de ocho segundos. `FIREBASE_AUTH_EMULATOR_HOST` se permite solo con `APP_ENV=development`; el emulador acepta tokens de prueba sin firma [O11, O12]. Los secretos quedan fuera de Git. La conexión real con `catalogo_api` pasó `pool.Ping`; faltan aplicar las migraciones y ejecutar el recorrido con identidad Firebase real [O5, O9].
 
 ## Contrato HTTP y errores
 
@@ -129,7 +132,7 @@ Las rutas protegidas futuras usarán el mismo mecanismo de verificación y recup
 3. **Sincronización y lectura.** Servicio y handlers implementados; pruebas HTTP con dobles ejecutadas para primera llamada, repetición, lectura, suspensión y errores de verificación. Pendiente petición HTTP real con token y base de desarrollo. `go test ./...` y `go vet ./...` ejecutados; detalles en la [bitácora](../../bitacora-construccion/auth/01-google-firebase-y-cuenta-sql.md).
 4. **Preparación de despliegue.** Variables y orden de migración documentados en el README. La configuración concreta de IAM/SQL se completará al vincular la instancia Firebase.
 
-**Criterio de cierre de integración pendiente:** dos peticiones reales autenticadas de la misma persona devuelven un único `account_id`; ninguna petición sin identidad válida crea filas; una suspensión local corta el acceso; la migración se aplica y revierte en desarrollo. El código de esta etapa está preparado, pero no se afirma ese cierre sin proyecto Firebase y SQL configurados.
+**Criterio de cierre de integración pendiente:** dos peticiones reales autenticadas de la misma persona devuelven un único `account_id`; ninguna petición sin identidad válida crea filas; una suspensión local corta el acceso; la migración se aplica y revierte en desarrollo. El proyecto, la instancia, ADC y el usuario SQL ya funcionan; no se afirma el cierre hasta aplicar la migración y ejecutar el recorrido autenticado.
 
 ## Decisiones explícitas para revisar antes de implementar
 

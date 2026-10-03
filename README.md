@@ -8,8 +8,8 @@ Configuración necesaria en un proyecto de desarrollo:
 
 1. Habilitar **Google** y deshabilitar **correo/contraseña** en Firebase Authentication.
 2. Crear o vincular la instancia PostgreSQL de SQL Connect. En `firebase dataconnect:sql:setup`, declinar que SQL Connect administre las migraciones. La [CLI oficial](https://firebase.google.com/docs/sql-connect/cli-reference) documenta esa opción y `dataconnect:sql:grant`.
-3. Conceder a la identidad de migración el rol SQL `owner` y a la identidad de la API el rol SQL `writer`, además de IAM `roles/cloudsql.client`. Configurar un Cloud SQL Auth Proxy o conector y obtener una cadena de conexión PostgreSQL. Si se elige autenticación IAM automática, el [proxy/conector](https://docs.cloud.google.com/sql/docs/postgres/iam-authentication) gestiona los tokens de acceso y la identidad necesita también [Cloud SQL Instance User (`roles/cloudsql.instanceUser`)](https://docs.cloud.google.com/sql/docs/postgres/connect-kubernetes-engine).
-4. Exportar variables de entorno sin registrar secretos: `FIREBASE_PROJECT_ID`, `DATABASE_URL` y credenciales ADC para Firebase Admin. `HTTP_ADDR` es opcional (por defecto `127.0.0.1:8080`). En Google Cloud, preferir la identidad de servicio del entorno; en local, `GOOGLE_APPLICATION_CREDENTIALS` puede señalar una credencial de servicio protegida. El [login ADC predeterminado de usuario final con `gcloud`](https://firebase.google.com/docs/admin/setup#test_with_gcloud_end_user_credentials) necesita configuración adicional para Firebase Authentication. El emulador Auth solo se admite con `APP_ENV=development` y `FIREBASE_AUTH_EMULATOR_HOST`.
+3. Conceder a la identidad que ejecuta la API el rol IAM `roles/cloudsql.client`. Crear además un usuario PostgreSQL integrado para la API —por ejemplo, `catalogo_api`— con los privilegios SQL mínimos sobre sus tablas. Son identidades diferentes: la cuenta de servicio abre el canal de Cloud SQL y el usuario PostgreSQL autentica la sesión dentro de la base.
+4. Copiar [`.env.example`](.env.example) como `.env` y configurar `FIREBASE_PROJECT_ID`, `INSTANCE_CONNECTION_NAME`, `DB_NAME`, `DB_USER` y `DB_PASSWORD`. `HTTP_ADDR` es opcional. En local, ejecutar `gcloud auth application-default login`; no definir `GOOGLE_APPLICATION_CREDENTIALS` si se desea usar ese ADC. En Cloud Run, asignar la cuenta de servicio a la revisión. El emulador Auth solo se admite con `APP_ENV=development` y `FIREBASE_AUTH_EMULATOR_HOST`.
 
 Desde la raíz de `navigate-business-api`, con la identidad SQL propietaria, ejecutar la migración **antes** de arrancar la API:
 
@@ -19,7 +19,7 @@ make migrate-up
 go run ./cmd/api
 ```
 
-El binario `migrate` debe estar disponible en `PATH` (`$(go env GOPATH)/bin` si se instaló con Go). `make migrate-up` aplica únicamente versiones pendientes y registra el estado en `schema_migrations`; `make migrate-down` revierte **una** versión y, con la única migración actual, elimina las tablas de cuentas y sus datos. Se ejecuta solamente en un entorno donde se desee ese borrado. La API no migra al iniciar. `DATABASE_URL` debe apuntar a la base de Cloud SQL asociada a Firebase SQL Connect; proporcionar una identidad SQL propietaria para migraciones y otra de escritura para la API. No ejecutar `firebase dataconnect:sql:migrate` sobre las mismas tablas. Si ya se aplicó la migración con el antiguo `cmd/migrate`, hay que conciliar manualmente su tabla de versiones antes de usar `golang-migrate`; no volver a ejecutar `up` sobre las tablas existentes.
+El binario `migrate` debe estar disponible en `PATH` (`$(go env GOPATH)/bin` si se instaló con Go). `make migrate-up` aplica únicamente versiones pendientes y registra el estado en `schema_migrations`; `make migrate-down` revierte **una** versión y, con la única migración actual, elimina las tablas de cuentas y sus datos. Se ejecuta solamente en un entorno donde se desee ese borrado. La API no migra al iniciar. Solo la CLI externa de migraciones sigue necesitando `DATABASE_URL`, normalmente apuntando a un Cloud SQL Auth Proxy local y usando una identidad SQL propietaria; la API usa directamente Cloud SQL Go Connector y las variables `DB_*`. No ejecutar `firebase dataconnect:sql:migrate` sobre las mismas tablas. Si ya se aplicó la migración con el antiguo `cmd/migrate`, hay que conciliar manualmente su tabla de versiones antes de usar `golang-migrate`; no volver a ejecutar `up` sobre las tablas existentes.
 
 Tras Google Sign-In en el futuro cliente, este enviará su **ID token de Firebase** por HTTPS:
 
@@ -30,9 +30,9 @@ Authorization: Bearer <FIREBASE_ID_TOKEN>
 
 La primera sincronización devuelve `201` y `{"account_id":"<uuid>","status":"active"}`; las siguientes devuelven `200` y el mismo ID. `GET /api/v1/auth/me` devuelve la cuenta ya sincronizada sin crearla. Token ausente, inválido o de un proveedor distinto produce `401`; cuenta suspendida, `403`; cuenta no sincronizada, `404`; indisponibilidad de Firebase o SQL, `503`. No se devuelven UID ni correo en estas respuestas.
 
-El [plan](docs/plans/01-autenticacion-firebase-y-cuenta-interna.md), la [investigación oficial](docs/fonts/firebase/01-google-auth-admin-y-sql-connect.md) y la [bitácora actual](bitacora-construccion/auth/03-modulo-auth-y-migraciones-estandar.md) documentan decisiones y comprobaciones. Sin ID de proyecto, credenciales y base reales todavía no se ha ejecutado el recorrido completo contra Firebase/Cloud SQL.
+El [plan](docs/plans/01-autenticacion-firebase-y-cuenta-interna.md), la [investigación oficial](docs/fonts/firebase/01-google-auth-admin-y-sql-connect.md), la [guía completa de conexión](docs/fonts/firebase/04-guia-cloud-sql-go-desde-cero.md) y la [bitácora de conexión](bitacora-construccion/config/02-conexion-cloud-sql-go-adc.md) documentan decisiones y comprobaciones. El conector y la autenticación PostgreSQL ya pasaron `Ping`; el recorrido completo queda pendiente de aplicar migraciones y verificar los endpoints con un ID token real.
 
-La estructura de auth se lee así: [`internal/auth`](internal/auth/) contiene cuenta, servicio y puerto de repositorio; sus subcarpetas [`http`](internal/auth/http/), [`firebase`](internal/auth/firebase/) y [`postgres`](internal/auth/postgres/) son adaptadores. [`internal/httpapi/router.go`](internal/httpapi/router.go) compone las rutas generales y [`cmd/api/main.go`](cmd/api/main.go) conecta las dependencias. Una funcionalidad futura podrá tener su propio paquete sin agregar sus handlers al paquete raíz HTTP.
+La estructura de auth se lee así: [`internal/auth`](internal/auth/) contiene cuenta, servicio y puerto de repositorio; sus subcarpetas [`http`](internal/auth/http/), [`firebase`](internal/auth/firebase/) y [`postgres`](internal/auth/postgres/) son adaptadores. [`internal/auth/module`](internal/auth/module/) reúne el servicio, handler y autenticador que pueden recibir otras funcionalidades. [`internal/config`](internal/config/) valida el entorno, [`internal/app`](internal/app/) crea una sola instancia de Firebase y del pool SQL y conecta los módulos; [`cmd/api/main.go`](cmd/api/main.go) arranca el servidor. El [estudio de módulos Nest y Go](docs/fonts/go-backend/arquitectura/02-nest-modulos-y-composicion-explicita-go.md) y la [bitácora de configuración](bitacora-construccion/config/01-composicion-modular-y-dependencias-compartidas.md) explican esta organización.
 
 ## Primer incremento: Hello World
 
@@ -70,7 +70,7 @@ Debe responder `200 OK`, `Content-Type: application/json` y:
 
 El recorrido de la ruta pública es `main.go → router.go → JSON`:
 
-- `cmd/api/main.go` configura e inicia el servidor HTTP local.
+- `cmd/api/main.go` inicia el servidor HTTP local con la configuración y el handler creados en `internal/config` e `internal/app`.
 - `internal/httpapi/router.go` agrupa las rutas en `/api/v1` y configura middleware.
 - `internal/httpapi/router.go` escribe la respuesta de demostración.
 
@@ -172,38 +172,24 @@ PostgreSQL, proveedor de IA y generador PDF
 
 Eso ya contiene la idea principal de la arquitectura hexagonal: la lógica central no conoce los detalles externos.
 
-### Estructura objetivo (se creará gradualmente)
+### Estructura actual y crecimiento por funcionalidad
 
 ```text
 navigate-business-api/
 ├── cmd/
 │   └── api/
 │       └── main.go
-│
 ├── internal/
-│   ├── httpapi/
-│   │   ├── router.go
-│   │   ├── health_handler.go
-│   │   └── middleware.go
-│   │
-│   ├── project/
-│   │   ├── model.go
-│   │   ├── service.go
-│   │   └── repository.go
-│   │
-│   ├── form/
-│   │   ├── model.go
-│   │   ├── service.go
-│   │   └── repository.go
-│   │
-│   ├── analysis/
-│   │   ├── service.go
-│   │   └── provider.go
-│   │
-│   └── postgres/
-│       ├── project_repository.go
-│       └── form_repository.go
-│
+│   ├── app/app.go
+│   ├── config/config.go
+│   ├── httpapi/router.go
+│   └── auth/
+│       ├── account.go
+│       ├── service.go
+│       ├── module/module.go
+│       ├── http/
+│       ├── firebase/
+│       └── postgres/
 ├── migrations/
 ├── go.mod
 └── go.sum
@@ -211,12 +197,14 @@ navigate-business-api/
 
 Cada parte tiene una responsabilidad:
 
-- `cmd/api/main.go`: construye y conecta todas las piezas.
-- `httpapi`: Chi, rutas, middleware, entrada y salida JSON.
-- `project`, `form`, `analysis`: reglas de la aplicación.
-- `repository.go` y `provider.go`: contratos que necesita la aplicación.
-- `postgres`: implementación real de esos contratos.
+- `cmd/api/main.go`: arranca el servidor; `internal/app/app.go` construye y conecta las piezas compartidas.
+- `config`: valida variables antes de crear servicios.
+- `httpapi`: Chi y rutas generales; `auth/http` contiene el contrato HTTP de auth.
+- `auth`: cuenta, servicio y contrato de repositorio; `auth/module` compone sus piezas.
+- `auth/postgres`: implementación SQL del contrato de auth.
 - `migrations`: creación y evolución de tablas.
+
+Cuando se implemente `project`, `form` o `analysis`, cada uno tendrá su propio paquete, módulo de composición y solo los adaptadores que realmente utilice. `app.New` compartirá las instancias necesarias entre ellos.
 
 ### Ejemplo del flujo
 

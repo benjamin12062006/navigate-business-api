@@ -2,20 +2,17 @@ package firebaseauth
 
 import (
 	"context"
-	"errors"
 
 	firebase "firebase.google.com/go/v4"
 	adminauth "firebase.google.com/go/v4/auth"
-)
-
-var (
-	ErrInvalidToken = errors.New("invalid Firebase ID token")
-	ErrUnavailable  = errors.New("Firebase Auth unavailable")
+	"navigate-business-api/internal/auth"
 )
 
 type Verifier struct {
 	client *adminauth.Client
 }
+
+var _ auth.TokenVerifier = (*Verifier)(nil)
 
 func New(ctx context.Context, projectID string) (*Verifier, error) {
 	app, err := firebase.NewApp(ctx, &firebase.Config{ProjectID: projectID})
@@ -33,16 +30,16 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (string, error) {
 	token, err := v.client.VerifyIDTokenAndCheckRevoked(ctx, raw)
 	if err != nil {
 		if adminauth.IsIDTokenInvalid(err) || adminauth.IsUserDisabled(err) || adminauth.IsTenantIDMismatch(err) {
-			return "", ErrInvalidToken
+			return "", auth.ErrInvalidIdentityToken
 		}
-		return "", ErrUnavailable
+		return "", auth.ErrIdentityProviderUnavailable
 	}
 	return googleUID(token)
 }
 
 func googleUID(token *adminauth.Token) (string, error) {
 	if token == nil || token.UID == "" || token.Firebase.SignInProvider != "google.com" {
-		return "", ErrInvalidToken
+		return "", auth.ErrInvalidIdentityToken
 	}
 	return token.UID, nil
 }

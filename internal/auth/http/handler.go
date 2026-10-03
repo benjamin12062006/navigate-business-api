@@ -9,16 +9,15 @@ import (
 )
 
 type Handler struct {
-	verifier TokenVerifier
-	service  *auth.Service
+	service *auth.Service
 }
 
-func NewHandler(verifier TokenVerifier, service *auth.Service) *Handler {
-	return &Handler{verifier: verifier, service: service}
+func NewHandler(service *auth.Service) *Handler {
+	return &Handler{service: service}
 }
 
 func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
-	account, err := h.service.Sync(r.Context(), verifiedUID(r.Context()))
+	account, err := h.service.Sync(r.Context(), VerifiedUID(r.Context()))
 	if writeAccountError(w, err) {
 		return
 	}
@@ -30,7 +29,7 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Current(w http.ResponseWriter, r *http.Request) {
-	account, err := h.service.Current(r.Context(), verifiedUID(r.Context()))
+	account, err := h.service.Current(r.Context(), VerifiedUID(r.Context()))
 	if writeAccountError(w, err) {
 		return
 	}

@@ -29,3 +29,6 @@ go.work
 # Environment variables
 .env
 .env.local
+
+# Local service-account keys (use ADC instead)
+*-firebase-adminsdk-*.json

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	adminauth "firebase.google.com/go/v4/auth"
+	"navigate-business-api/internal/auth"
 )
 
 func TestGoogleUID(t *testing.T) {
@@ -22,7 +23,7 @@ func TestGoogleUID(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			uid, err := googleUID(tc.token)
-			if uid != tc.wantUID || (tc.wantFail && !errors.Is(err, ErrInvalidToken)) || (!tc.wantFail && err != nil) {
+			if uid != tc.wantUID || (tc.wantFail && !errors.Is(err, auth.ErrInvalidIdentityToken)) || (!tc.wantFail && err != nil) {
 				t.Fatalf("googleUID() = %q, %v", uid, err)
 			}
 		})

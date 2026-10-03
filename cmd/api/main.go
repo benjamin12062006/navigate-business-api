@@ -2,58 +2,42 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-	"navigate-business-api/internal/auth"
-	"navigate-business-api/internal/auth/firebase"
-	authhttp "navigate-business-api/internal/auth/http"
-	authpostgres "navigate-business-api/internal/auth/postgres"
-	"navigate-business-api/internal/httpapi"
+	"navigate-business-api/internal/app"
+	"navigate-business-api/internal/config"
 )
 
 func main() {
-	projectID := os.Getenv("FIREBASE_PROJECT_ID")
-	databaseURL := os.Getenv("DATABASE_URL")
-	if projectID == "" || databaseURL == "" {
-		log.Fatal("FIREBASE_PROJECT_ID y DATABASE_URL son obligatorios")
+	if err := run(); err != nil {
+		log.Fatal(err)
 	}
-	if os.Getenv("FIREBASE_AUTH_EMULATOR_HOST") != "" && os.Getenv("APP_ENV") != "development" {
-		log.Fatal("FIREBASE_AUTH_EMULATOR_HOST solo se permite con APP_ENV=development")
+}
+
+func run() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	verifier, err := firebaseauth.New(ctx, projectID)
+	application, err := app.New(ctx, cfg)
 	if err != nil {
-		log.Fatalf("no se pudo iniciar Firebase Auth: %v", err)
+		return err
 	}
-	poolConfig, err := pgxpool.ParseConfig(databaseURL)
-	if err != nil {
-		log.Fatal("DATABASE_URL no es válido")
-	}
-	poolConfig.MaxConns = 5
-	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
-	if err != nil {
-		log.Fatalf("no se pudo crear el pool SQL: %v", err)
-	}
-	defer pool.Close()
-	if err := pool.Ping(ctx); err != nil {
-		log.Fatalf("no se pudo conectar a PostgreSQL: %v", err)
-	}
+	defer func() {
+		if err := application.Close(); err != nil {
+			log.Printf("cerrar conector Cloud SQL: %v", err)
+		}
+	}()
 
-	service := auth.NewService(authpostgres.NewAccountRepository(pool))
-	handler := authhttp.NewHandler(verifier, service)
-	addr := os.Getenv("HTTP_ADDR")
-	if addr == "" {
-		addr = "127.0.0.1:8080"
-	}
 	server := &http.Server{
-		Addr:              addr,
-		Handler:           httpapi.NewRouter(handler),
+		Addr:              cfg.HTTPAddr,
+		Handler:           application.Handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -61,5 +45,8 @@ func main() {
 	}
 
 	log.Printf("Iniciando API en http://%s", server.Addr)
-	log.Fatal(server.ListenAndServe())
+	if err := server.ListenAndServe(); err != nil {
+		return fmt.Errorf("servidor HTTP: %w", err)
+	}
+	return nil
 }

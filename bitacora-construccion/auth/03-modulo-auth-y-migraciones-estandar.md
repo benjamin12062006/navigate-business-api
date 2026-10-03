@@ -32,6 +32,8 @@ Se eliminaron `cmd/migrate/main.go` y `runner.go`. El [Makefile](../../Makefile)
 
 No hay credenciales ni base SQL configuradas para aplicar `up`/`down` reales ni probar el servidor contra Firebase. El ejecutor anterior y `golang-migrate` usan formatos distintos de `schema_migrations`; una base donde ya se ejecutó `cmd/migrate` necesita una conciliación de versión antes de usar la nueva herramienta. En este entorno no consta una migración aplicada. Tampoco se modificó Expo.
 
+Evolución posterior: la [bitácora config 01](../config/01-composicion-modular-y-dependencias-compartidas.md) registra el traslado de la composición desde `cmd/api/main.go` a `internal/app/app.go` y la separación del autenticador HTTP para compartirlo.
+
 ## Fuentes
 
 [^F1]: [25. Clean Layered Architecture](../../docs/reconstrucciones-cursos-go/APIs%20de%20Producción%20con%20Go/Sección%205%20Scaffolding%20our%20API%20Server/25.%20Clean%20Layered%20Architecture.md), Tiago Taquelim, *APIs de Producción con Go*, sección 5, líneas 13–25 y 39–43; consulta 2026-09-29.

@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"navigate-business-api/internal/auth"
-	"navigate-business-api/internal/auth/firebase"
 	authhttp "navigate-business-api/internal/auth/http"
 	"navigate-business-api/internal/httpapi"
 )
@@ -62,7 +61,7 @@ func request(router http.Handler, method, path, bearer string) *httptest.Respons
 
 func TestAuthRoutes(t *testing.T) {
 	repo := &fakeRepository{}
-	router := httpapi.NewRouter(authhttp.NewHandler(fakeVerifier{}, auth.NewService(repo)))
+	router := httpapi.NewRouter(authhttp.NewHandler(auth.NewService(repo)), authhttp.NewAuthenticator(fakeVerifier{}))
 	if got := request(router, http.MethodGet, "/api/v1/auth/me", "Bearer token"); got.Code != http.StatusNotFound {
 		t.Fatalf("me before sync = %d", got.Code)
 	}
@@ -84,7 +83,7 @@ func TestAuthRoutes(t *testing.T) {
 
 func TestAuthRejectsMissingAndInvalidTokens(t *testing.T) {
 	repo := &fakeRepository{}
-	router := httpapi.NewRouter(authhttp.NewHandler(fakeVerifier{}, auth.NewService(repo)))
+	router := httpapi.NewRouter(authhttp.NewHandler(auth.NewService(repo)), authhttp.NewAuthenticator(fakeVerifier{}))
 	for _, bearer := range []string{"", "Basic value", "Bearer "} {
 		if got := request(router, http.MethodPost, "/api/v1/auth/sync", bearer); got.Code != http.StatusUnauthorized {
 			t.Fatalf("bearer %q = %d", bearer, got.Code)
@@ -97,10 +96,11 @@ func TestAuthRejectsMissingAndInvalidTokens(t *testing.T) {
 		err  error
 		want int
 	}{
-		{firebaseauth.ErrInvalidToken, http.StatusUnauthorized},
-		{errors.New("provider unavailable"), http.StatusServiceUnavailable},
+		{auth.ErrInvalidIdentityToken, http.StatusUnauthorized},
+		{auth.ErrIdentityProviderUnavailable, http.StatusServiceUnavailable},
+		{errors.New("unexpected verifier failure"), http.StatusServiceUnavailable},
 	} {
-		router := httpapi.NewRouter(authhttp.NewHandler(fakeVerifier{err: tc.err}, auth.NewService(&fakeRepository{})))
+		router := httpapi.NewRouter(authhttp.NewHandler(auth.NewService(&fakeRepository{})), authhttp.NewAuthenticator(fakeVerifier{err: tc.err}))
 		if got := request(router, http.MethodPost, "/api/v1/auth/sync", "Bearer token"); got.Code != tc.want {
 			t.Fatalf("verify error = %d, want %d", got.Code, tc.want)
 		}
@@ -108,9 +108,20 @@ func TestAuthRejectsMissingAndInvalidTokens(t *testing.T) {
 }
 
 func TestAuthStorageUnavailable(t *testing.T) {
-	router := httpapi.NewRouter(authhttp.NewHandler(fakeVerifier{}, auth.NewService(&fakeRepository{err: errors.New("database unavailable")})))
+	router := httpapi.NewRouter(authhttp.NewHandler(auth.NewService(&fakeRepository{err: errors.New("database unavailable")})), authhttp.NewAuthenticator(fakeVerifier{}))
 	got := request(router, http.MethodPost, "/api/v1/auth/sync", "Bearer token")
 	if got.Code != http.StatusServiceUnavailable || got.Body.String() != "{\"error\":\"storage_unavailable\"}\n" {
 		t.Fatalf("storage failure = %d %s", got.Code, got.Body.String())
+	}
+}
+
+func TestAuthenticatorCanProtectAnotherFeature(t *testing.T) {
+	authenticator := authhttp.NewAuthenticator(fakeVerifier{})
+	handler := authenticator.RequireGoogle(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(authhttp.VerifiedUID(r.Context())))
+	}))
+	got := request(handler, http.MethodGet, "/api/v1/other", "Bearer token")
+	if got.Code != http.StatusOK || got.Body.String() != "firebase-uid" {
+		t.Fatalf("shared authentication = %d %q", got.Code, got.Body.String())
 	}
 }

@@ -6,16 +6,20 @@ import (
 	"net/http"
 	"strings"
 
-	"navigate-business-api/internal/auth/firebase"
+	"navigate-business-api/internal/auth"
 )
-
-type TokenVerifier interface {
-	Verify(context.Context, string) (string, error)
-}
 
 type uidKey struct{}
 
-func (h *Handler) RequireGoogle(next http.Handler) http.Handler {
+type Authenticator struct {
+	verifier auth.TokenVerifier
+}
+
+func NewAuthenticator(verifier auth.TokenVerifier) *Authenticator {
+	return &Authenticator{verifier: verifier}
+}
+
+func (a *Authenticator) RequireGoogle(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(r.Header.Values("Authorization")) != 1 {
 			writeAuthError(w, http.StatusUnauthorized, "invalid_token")
@@ -27,11 +31,14 @@ func (h *Handler) RequireGoogle(next http.Handler) http.Handler {
 			writeAuthError(w, http.StatusUnauthorized, "invalid_token")
 			return
 		}
-		uid, err := h.verifier.Verify(r.Context(), value[len(prefix):])
+		uid, err := a.verifier.Verify(r.Context(), value[len(prefix):])
 		if err != nil {
-			if errors.Is(err, firebaseauth.ErrInvalidToken) {
+			switch {
+			case errors.Is(err, auth.ErrInvalidIdentityToken):
 				writeAuthError(w, http.StatusUnauthorized, "invalid_token")
-			} else {
+			case errors.Is(err, auth.ErrIdentityProviderUnavailable):
+				writeAuthError(w, http.StatusServiceUnavailable, "auth_unavailable")
+			default:
 				writeAuthError(w, http.StatusServiceUnavailable, "auth_unavailable")
 			}
 			return
@@ -44,7 +51,7 @@ func (h *Handler) RequireGoogle(next http.Handler) http.Handler {
 	})
 }
 
-func verifiedUID(ctx context.Context) string {
+func VerifiedUID(ctx context.Context) string {
 	uid, _ := ctx.Value(uidKey{}).(string)
 	return uid
 }
